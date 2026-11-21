@@ -1,0 +1,152 @@
+# ================================
+# Docker Compose Configuration - Development
+# Backend + frontend with hot reload, local MongoDB
+# Production lives in docker-compose.yml
+# ================================
+
+# Own project name, so dev containers, network and volumes never replace the production ones
+name: ${PROJECT_NAME:-app}-dev
+
+# Shared network for all services
+networks:
+  app-network:
+    driver: bridge
+
+# Persistent volumes
+volumes:
+  mongo_data:
+    driver: local
+
+services:
+  # ================================
+  # MongoDB (local)
+  # ================================
+  mongo:
+    image: mongo:7
+    container_name: ${PROJECT_NAME:-app}-mongo-dev
+    restart: unless-stopped
+    ports:
+      - "${MONGO_EXPOSE:-127.0.0.1:27017}:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ================================
+  # Backend Service
+  # ================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: development
+      args:
+        - NODE_ENV=development
+    container_name: ${PROJECT_NAME:-app}-backend-dev
+    restart: unless-stopped
+    ports:
+      - "${BACKEND_DEV_EXPOSE:-127.0.0.1:3002}:3000"
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - MONGO_URI=${MONGO_URI:-}
+      - MONGO_HOST=${MONGO_HOST:-mongo}
+      - MONGO_PORT=${MONGO_PORT:-27017}
+      - MONGO_DATABASE=${MONGO_DATABASE:-project}
+      - MONGO_USERNAME=${MONGO_USERNAME}
+      - MONGO_PASSWORD=${MONGO_PASSWORD}
+      - MONGO_AUTH_SOURCE=${MONGO_AUTH_SOURCE:-admin}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
+      - JWT_ACCESS_TTL=${JWT_ACCESS_TTL:-15m}
+      - JWT_REFRESH_TTL_DAYS=${JWT_REFRESH_TTL_DAYS:-7}
+      - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:3001}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - LLM_MODEL_FAST=${LLM_MODEL_FAST:-claude-haiku-5-5}
+      - LLM_MODEL_SMART=${LLM_MODEL_SMART:-claude-sonnet-5-5}
+      - LLM_TASK_MODELS=${LLM_TASK_MODELS:-}
+      - LLM_RPM=${LLM_RPM:-50}
+      - LLM_CONCURRENCY=${LLM_CONCURRENCY:-4}
+      - LLM_CACHE_TTL=${LLM_CACHE_TTL:-5m}
+      - LLM_BATCH=${LLM_BATCH:-on}
+      - LLM_BATCH_POLL_MS=${LLM_BATCH_POLL_MS:-60000}
+      - LLM_POOL_SIZE=${LLM_POOL_SIZE:-10}
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      - ADMIN_FULL_NAME=${ADMIN_FULL_NAME:-Administrator}
+      - ORGANIZATION_NAME=${ORGANIZATION_NAME:-CaseLab}
+      - LOGS_DIR=/app/logs
+      - UPLOADS_DIR=/app/uploads
+      - MAX_FILE_SIZE=${MAX_FILE_SIZE:-16777216}
+      - ENABLE_MONGODB=${ENABLE_MONGODB:-true}
+      # Redis and RabbitMQ are not part of this file; the health check treats anything except "false" as enabled
+      - ENABLE_REDIS=false
+      - ENABLE_RABBITMQ=false
+      - ENABLE_MONITORING=${ENABLE_MONITORING:-false}
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+      - ./uploads:/app/uploads
+      - ./backend/logs:/app/logs
+    command: ["npm", "run", "dev"]
+    networks:
+      - app-network
+    depends_on:
+      mongo:
+        condition: service_healthy
+    # dist/ does not exist in development, so the health check asks /health directly
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ================================
+  # Frontend Service
+  # ================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: development
+      args:
+        - NODE_ENV=development
+    container_name: ${PROJECT_NAME:-app}-frontend-dev
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_DEV_EXPOSE:-127.0.0.1:3001}:3001"
+    environment:
+      - NODE_ENV=development
+      - VITE_DEV_SERVER_PORT=3001
+      # Vite proxies /api here, so the SPA and the refresh cookie share one origin
+      - VITE_PROXY_TARGET=http://backend:3000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: ["npm", "run", "dev"]
+    networks:
+      - app-network
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+# ================================
+# Usage
+# ================================
+
+# docker compose -f docker-compose.dev.yml up -d --build
+# docker compose -f docker-compose.dev.yml exec backend npm run seed
+# docker compose -f docker-compose.dev.yml down

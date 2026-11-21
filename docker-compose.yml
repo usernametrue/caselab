@@ -1,0 +1,122 @@
+# ================================
+# Docker Compose Configuration
+# Full-stack boilerplate with modular services
+# Production: backend + frontend only. MongoDB is external, set MONGO_URI or MONGO_HOST in .env
+# Development lives in docker-compose.dev.yml
+# ================================
+
+version: '3.8'
+
+# Shared network for all services
+networks:
+  app-network:
+    driver: bridge
+
+services:
+  # ================================
+  # Backend Service
+  # ================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      # Fixed to production so NODE_ENV=development in .env cannot build the dev image here
+      target: production
+      args:
+        - NODE_ENV=production
+    container_name: ${PROJECT_NAME:-app}-backend
+    restart: unless-stopped
+    ports:
+      - "${BACKEND_EXPOSE:-127.0.0.1:8380}:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      # No local mongo container in production: MONGO_URI (takes priority) or MONGO_HOST must point to the server
+      - MONGO_URI=${MONGO_URI:-}
+      - MONGO_HOST=${MONGO_HOST:-}
+      - MONGO_PORT=${MONGO_PORT:-27017}
+      - MONGO_DATABASE=${MONGO_DATABASE:-project}
+      - MONGO_USERNAME=${MONGO_USERNAME}
+      - MONGO_PASSWORD=${MONGO_PASSWORD}
+      - MONGO_AUTH_SOURCE=${MONGO_AUTH_SOURCE:-admin}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
+      - JWT_ACCESS_TTL=${JWT_ACCESS_TTL:-15m}
+      - JWT_REFRESH_TTL_DAYS=${JWT_REFRESH_TTL_DAYS:-7}
+      - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - LLM_MODEL_FAST=${LLM_MODEL_FAST:-claude-haiku-5-5}
+      - LLM_MODEL_SMART=${LLM_MODEL_SMART:-claude-sonnet-5-5}
+      - LLM_TASK_MODELS=${LLM_TASK_MODELS:-}
+      - LLM_RPM=${LLM_RPM:-50}
+      - LLM_CONCURRENCY=${LLM_CONCURRENCY:-4}
+      - LLM_CACHE_TTL=${LLM_CACHE_TTL:-5m}
+      - LLM_BATCH=${LLM_BATCH:-on}
+      - LLM_BATCH_POLL_MS=${LLM_BATCH_POLL_MS:-60000}
+      - LLM_POOL_SIZE=${LLM_POOL_SIZE:-10}
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      - ADMIN_FULL_NAME=${ADMIN_FULL_NAME:-Administrator}
+      - ORGANIZATION_NAME=${ORGANIZATION_NAME:-CaseLab}
+      - LOGS_DIR=/app/logs
+      - UPLOADS_DIR=/app/uploads
+      - MAX_FILE_SIZE=${MAX_FILE_SIZE:-16777216}
+      - ENABLE_MONGODB=${ENABLE_MONGODB:-true}
+      # Redis and RabbitMQ are not part of this file; the health check treats anything except "false" as enabled
+      - ENABLE_REDIS=false
+      - ENABLE_RABBITMQ=false
+      - ENABLE_MONITORING=${ENABLE_MONITORING:-false}
+    volumes:
+      - ./uploads:/app/uploads
+      - ./backend/logs:/app/logs
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "node", "dist/scripts/health-check.js"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ================================
+  # Frontend Service
+  # ================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: production
+      args:
+        - NODE_ENV=production
+    container_name: ${PROJECT_NAME:-app}-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_EXPOSE:-127.0.0.1:8381}:80"
+    environment:
+      - NODE_ENV=production
+      - VITE_API_URL=${BACKEND_URL:-http://localhost:3000}
+      - VITE_APP_TITLE=${VUE_APP_TITLE:-Full Stack App}
+      - VITE_APP_DESCRIPTION=${VUE_APP_DESCRIPTION:-Modern full-stack application}
+    volumes:
+      - ./uploads:/usr/share/nginx/html/uploads:ro
+    networks:
+      - app-network
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+# ================================
+# Usage
+# ================================
+
+# Production
+# docker compose up -d --build
+
+# Development (backend + frontend + mongo, hot reload)
+# docker compose -f docker-compose.dev.yml up -d --build
